@@ -8,6 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from pymediainfo import MediaInfo
+import wavelink
 
 class Music(commands.Cog):
     def __init__(self, bot):
@@ -16,7 +17,7 @@ class Music(commands.Cog):
         self.cursor = bot.cursor
         self.data = bot.data
         self.flat_file = bot.flat_file
-        self.guilds = bot.guilds_list
+        self.guilds = bot.guilds_
         self.language_directory = bot.language_directory
         self.lock = bot.lock
         self.messages = {}
@@ -39,7 +40,7 @@ class Music(commands.Cog):
                     except: pass
             try: duration = float(track.to_data()["duration"]) / 1000
             except: duration = .0
-            return {"name": name, "duration": duration}
+        return {"name": name, "duration": duration}
 
     async def polished_song_name(self, file, name): return f"[{name}](<{file}>)"
 
@@ -1014,7 +1015,6 @@ class Music(commands.Cog):
 
     async def play_song(self, context, url=None, name=None, playlist=None):
         try:
-            async def add_time(guild, time): guild["time"] += time
             guild = self.guilds[str(context.guild.id)]
             try: voice_channel = context.user.voice.channel
             except: voice_channel = None
@@ -1026,7 +1026,7 @@ class Music(commands.Cog):
                     if playlist is None: playlist = []
                     for song in playlist:
                         # add the track to the queue
-                        guild["queue"].append({"file": song["file"], "name": song["name"], "time": "0", "duration": song["duration"], "silent": False})
+                        guild["queue"].append({"file": song["file"], "name": song["name"], "duration": song["duration"], "silent": False})
                 else:
                     response = requests.get(url, stream=True)
                     try: metadata = await self.get_metadata(BytesIO(response.content), url)
@@ -1045,13 +1045,13 @@ class Music(commands.Cog):
                     await context.followup.send(await self.polished_message(guild["strings"]["queue_add_song"], {"song": await self.polished_song_name(url, name),
                                                                                                                  "index": len(guild["queue"]) + 1}))
                     # add the track to the queue
-                    guild["queue"].append({"file": url, "name": name, "time": "0", "duration": metadata["duration"], "silent": False})
+                    guild["queue"].append({"file": url, "name": name, "duration": metadata["duration"], "silent": False})
                 if guild["connected"]: voice = context.guild.voice_client
                 else:
-                    voice = await voice_channel.connect()
+                    voice = await voice_channel.connect(cls=wavelink.Player)
                     guild["connected"] = True
                     await context.guild.change_voice_state(channel=voice_channel, self_mute=False, self_deaf=True)
-                if not voice.is_playing():
+                if not voice.playing:
                     while guild["index"] < len(guild["queue"]):
                         if guild["connected"]:
                             if guild["queue"][guild["index"]]["silent"]: guild["queue"][guild["index"]]["silent"] = False
@@ -1061,20 +1061,11 @@ class Music(commands.Cog):
                                                                                                                               guild["queue"][guild["index"]]["name"]),
                                                                                         "index": guild["index"] + 1,
                                                                                         "max": len(guild["queue"])}))
-                                guild["time"] = .0
                         # play the track
-                        if not voice.is_playing():
-                            source = discord.FFmpegPCMAudio(source=guild["queue"][guild["index"]]["file"],
-                                                            before_options=f"-re -ss {guild['queue'][guild['index']]['time']}")
-                            source.read()
-                            voice.play(source)
-                            guild["queue"][guild["index"]]["time"] = "0"
-                            voice.source = discord.PCMVolumeTransformer(voice.source, volume=1.0)
-                            voice.source.volume = guild["volume"]
+                        if not voice.playing:
+                            await voice.play((await wavelink.Playable.search(guild["queue"][guild["index"]]["file"]))[0], volume=int(guild["volume"] * 100))
                         # ensure that the track plays completely or is skipped by command before proceeding
-                        while voice.is_playing() or voice.is_paused():
-                            await asyncio.sleep(.1)
-                            if voice.is_playing(): await add_time(guild, .1)
+                        while voice.playing or voice.paused: await asyncio.sleep(.1)
 
                         guild["index"] += 1
                         if guild["index"] == len(guild["queue"]):
@@ -1088,7 +1079,7 @@ class Music(commands.Cog):
         elif file is not None and new_index is not None and song_url is None: await self.insert_song(context, str(file), new_name, new_index)
         else: await context.response.send_message(self.guilds[str(context.guild.id)]["strings"]["invalid_command"])
 
-    async def insert_song(self, context, url, name, index, time="0", duration=None, silent=False):
+    async def insert_song(self, context, url, name, index, duration=None, silent=False):
         guild = self.guilds[str(context.guild.id)]
         try: voice_channel = context.user.voice.channel
         except: voice_channel = None
@@ -1108,7 +1099,7 @@ class Music(commands.Cog):
                 await context.response.send_message(await self.polished_message(guild["strings"]["invalid_song"], {"song": await self.polished_song_name(url, name)}))
                 return
             # add the track to the queue
-            guild["queue"].insert(index - 1, {"file": url, "name": name, "time": time, "duration": duration, "silent": silent})
+            guild["queue"].insert(index - 1, {"file": url, "name": name, "duration": duration, "silent": silent})
             if index - 1 <= guild["index"]: guild["index"] += 1
             if not silent: await context.response.send_message(await self.polished_message(guild["strings"]["queue_insert_song"],
                                                                                            {"song": await self.polished_song_name(url, name), "index": index}))
@@ -1198,8 +1189,7 @@ class Music(commands.Cog):
                                                                              "index": guild["index"] + 2,
                                                                              "max": len(guild["queue"])}))
             guild["queue"][guild["index"] + 1]["silent"] = True
-            guild["time"] = .0
-            context.guild.voice_client.stop()
+            await context.guild.voice_client.skip(force=True)
         else: await context.response.send_message(guild["strings"]["queue_no_songs"], ephemeral=True)
 
     @app_commands.command(description="previous_command_desc")
@@ -1216,8 +1206,7 @@ class Music(commands.Cog):
                                                                              "index": guild["index"] + 2,
                                                                              "max": len(guild["queue"])}))
             guild["queue"][guild["index"] + 1]["silent"] = True
-            guild["time"] = .0
-            context.guild.voice_client.stop()
+            await context.guild.voice_client.skip(force=True)
         else: await context.response.send_message(guild["strings"]["queue_no_songs"], ephemeral=True)
 
     @app_commands.command(description="stop_command_desc")
@@ -1231,9 +1220,9 @@ class Music(commands.Cog):
         guild = self.guilds[str(id)]
         guild["queue"] = []
         try:
-            if context.guild.voice_client.is_playing():
+            if context.guild.voice_client.playing:
                 guild["index"] = -1
-                context.guild.voice_client.stop()
+                await context.guild.voice_client.skip(force=True)
             else: guild["index"] = 0
             if leave or not guild["keep"]:
                 guild["connected"] = False
@@ -1247,12 +1236,8 @@ class Music(commands.Cog):
     async def pause_command(self, context: discord.Interaction):
         guild = self.guilds[str(context.guild.id)]
         if guild["queue"]:
-            if context.guild.voice_client.is_paused():
-                context.guild.voice_client.resume()
-                now_or_no_longer = guild["strings"]["no_longer"]
-            else:
-                context.guild.voice_client.pause()
-                now_or_no_longer = guild["strings"]["now"]
+            context.guild.voice_client.pause(not context.guild.voice_client.paused)
+            now_or_no_longer = guild["strings"]["no_longer"] if context.guild.voice_client.paused else guild["strings"]["now"]
             await context.response.send_message(await self.polished_message(guild["strings"]["pause"], {"now_or_no_longer": now_or_no_longer}))
         else: await context.response.send_message(guild["strings"]["queue_no_songs"], ephemeral=True)
 
@@ -1269,31 +1254,22 @@ class Music(commands.Cog):
                                                                                                                    guild["queue"][guild["index"]]["name"]),
                                                                              "index": guild["index"] + 1,
                                                                              "max": len(guild["queue"])}))
-            guild["time"] = seconds
-            await self.insert_song(context,
-                                   guild["queue"][guild["index"]]["file"],
-                                   guild["queue"][guild["index"]]["name"],
-                                   guild["index"] + 2,
-                                   seconds,
-                                   guild["queue"][guild["index"]]["duration"],
-                                   True)
-            await self.remove_song(context, guild["index"] + 1, True)
+            await context.guild.voice_client.seek(int(seconds * 1000))
         else: await context.response.send_message(guild["strings"]["queue_no_songs"], ephemeral=True)
 
     @app_commands.command(description="forward_command_desc")
     async def forward_command(self, context: discord.Interaction, time: str):
-        await self.jump_to(context, str(float(self.guilds[str(context.guild.id)]["time"]) + await self.convert_to_seconds(time)))
+        await self.jump_to(context, str(context.guild.voice_client.position / 1000 + await self.convert_to_seconds(time)))
 
     @app_commands.command(description="rewind_command_desc")
     async def rewind_command(self, context: discord.Interaction, time: str):
-        await self.jump_to(context, str(float(self.guilds[str(context.guild.id)]["time"]) - await self.convert_to_seconds(time)))
+        await self.jump_to(context, str(context.guild.voice_client.position / 1000 - await self.convert_to_seconds(time)))
 
     @app_commands.command(description="when_command_desc")
     async def when_command(self, context: discord.Interaction):
         guild = self.guilds[str(context.guild.id)]
-        if guild["queue"]: await context.response.send_message("".join([await self.convert_to_time(guild["time"]),
-                                                                        " / ",
-                                                                        await self.convert_to_time(guild["queue"][guild["index"]]["duration"])]),
+        if guild["queue"]: await context.response.send_message(" / ".join([await self.convert_to_time(context.guild.voice_client.position / 1000),
+                                                                           await self.convert_to_time(guild["queue"][guild["index"]]["duration"])]),
                                                                ephemeral=True)
         else: await context.response.send_message(guild["strings"]["queue_no_songs"], ephemeral=True)
 
@@ -1341,7 +1317,7 @@ class Music(commands.Cog):
             await context.response.send_message(guild["strings"]["shuffle"])
             if bool(restart):
                 guild["index"] = -1
-                context.guild.voice_client.stop()
+                await context.guild.voice_client.skip(force=True)
         else: await context.response.send_message(guild["strings"]["queue_no_songs"], ephemeral=True)
 
     @app_commands.command(description="queue_command_desc")
@@ -1385,12 +1361,12 @@ class Music(commands.Cog):
         if set is not None:
             if set.endswith("%"): guild["volume"] = float(set.replace("%", "")) / 100
             else: guild["volume"] = float(set)
-            if context.guild.voice_client is not None and context.guild.voice_client.is_playing(): context.guild.voice_client.source.volume = guild["volume"]
-        volume_percent = guild["volume"] * 100
-        if volume_percent == float(int(volume_percent)): volume_percent = int(volume_percent)
-        if set is None: await context.response.send_message(await self.polished_message(guild["strings"]["volume"], {"volume": str(volume_percent) + "%"}),
+            if context.guild.voice_client is not None and context.guild.voice_client.playing: await context.guild.voice_client.set_volume(int(guild["volume"] * 100))
+        volume = guild["volume"] * 100
+        if volume == float(int(volume)): volume = int(volume)
+        if set is None: await context.response.send_message(await self.polished_message(guild["strings"]["volume"], {"volume": str(volume) + "%"}),
                                                             ephemeral=True)
-        else: await context.response.send_message(await self.polished_message(guild["strings"]["volume_change"], {"volume": str(volume_percent) + "%"}))
+        else: await context.response.send_message(await self.polished_message(guild["strings"]["volume_change"], {"volume": str(volume) + "%"}))
 
     @app_commands.command(description="keep_command_desc")
     async def keep_command(self, context: discord.Interaction, set: typing.Literal[0, 1]=None):
@@ -1467,7 +1443,7 @@ class Music(commands.Cog):
     async def on_voice_state_update(self, member, before, after):
         try:
             # ensure that this bot disconnects from any empty voice channel it is in
-            if member.guild.voice_client.is_connected():
+            if member.guild.voice_client.connected:
                 for voice_channel in member.guild.voice_channels:
                     if voice_channel.voice_states and list(voice_channel.voice_states)[0] == self.bot.user.id and len(list(voice_channel.voice_states)) == 1:
                         await self.stop_music(member, True, member.guild)

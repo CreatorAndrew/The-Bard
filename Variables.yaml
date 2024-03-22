@@ -11,3 +11,8 @@ postgresql_credentials:
     password:
     host: # Optional
     port: # Optional
+# Set the credentials for Lavalink (used for playing audio).
+lavalink_credentials:
+    password:
+    host: # Optional
+    port: # Optional

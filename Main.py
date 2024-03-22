@@ -7,6 +7,7 @@ import yaml
 import discord
 from discord import app_commands
 from discord.ext import commands
+import wavelink
 
 class CursorHandler:
     def __init__(self, connection, cursor, integer_data_type, placeholder):
@@ -40,7 +41,7 @@ class Main(commands.Cog):
         self.flat_file = bot.flat_file
         self.language_directory = bot.language_directory
         self.lock = bot.lock
-        self.guilds = bot.guilds_list
+        self.guilds = bot.guilds_
         self.default_language = "american_english"
         self.init_guilds(bot.init_guilds)
         self.set_language_options()
@@ -317,7 +318,6 @@ class Main(commands.Cog):
                                           "repeat": repeat,
                                           "queue": [],
                                           "index": 0,
-                                          "time": .0,
                                           "volume": 1.0,
                                           "connected": False}
 
@@ -351,12 +351,16 @@ bot.remove_command("help")
 
 variables = yaml.safe_load(open("Variables.yaml", "r"))
 
-guilds = {}
 language_directory = "Languages"
-lock = asyncio.Lock()
 
 @bot.event
-async def on_ready(): print(f"Logged in as {bot.user}")
+async def on_ready():
+    if variables["lavalink_credentials"]["host"] is None: variables["lavalink_credentials"]["host"] = "127.0.0.1"
+    if variables["lavalink_credentials"]["port"] is None: variables["lavalink_credentials"]["port"] = 2333
+    await wavelink.Pool.connect(nodes=[wavelink.Node(uri=f"http://{variables['lavalink_credentials']['host']}:{variables['lavalink_credentials']['port']}",
+                                                     password=variables["lavalink_credentials"]["password"])],
+                                client=bot)
+    print(f"Logged in as {bot.user}")
 
 @bot.command()
 async def sync_commands(context):
@@ -443,10 +447,10 @@ async def main():
         bot.cursor = cursor
         bot.data = data
         bot.flat_file = flat_file
-        bot.guilds_list = guilds
+        bot.guilds_ = {}
         bot.init_guilds = init_guilds
         bot.language_directory = language_directory
-        bot.lock = lock
+        bot.lock = asyncio.Lock()
         await bot.add_cog(Main(bot))
         await bot.load_extension("Music")
         await bot.start(variables["token"])
