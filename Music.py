@@ -1250,8 +1250,8 @@ class Music(commands.Cog):
     async def pause_command(self, context: discord.Interaction):
         guild = self.guilds[str(context.guild.id)]
         if guild["queue"]:
-            context.guild.voice_client.pause(not context.guild.voice_client.paused)
-            now_or_no_longer = guild["strings"]["no_longer"] if context.guild.voice_client.paused else guild["strings"]["now"]
+            await context.guild.voice_client.pause(not context.guild.voice_client.paused)
+            now_or_no_longer = guild["strings"]["now"] if context.guild.voice_client.paused else guild["strings"]["no_longer"]
             await context.response.send_message(await self.polished_message(guild["strings"]["pause"], {"now_or_no_longer": now_or_no_longer}))
         else: await context.response.send_message(guild["strings"]["queue_no_songs"], ephemeral=True)
 
